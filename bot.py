@@ -8,7 +8,7 @@ from telethon.errors import (
 import asyncio
 import nest_asyncio
 from telethon.sync import TelegramClient as SyncTelegramClient
-# Replace aiohttp with standard library modules
+# Using standard library modules for health check
 import http.server
 import socketserver
 import threading
@@ -25,7 +25,7 @@ nest_asyncio.apply()
 API_ID = '25832801'
 API_HASH = 'a87d2e2d87303042bc95c2ebbba304b1'
 BOT_TOKEN = '8159885107:AAGHJyvF6NT8o5WXojiDlK_pxmmoeoY6drU'
-# SOURCE_CHANNEL can be a public username (e.g., '@Dhol_Ullu_Originals') or private channel (invite or ID) that the user is a member of
+# SOURCE_CHANNEL can be a public username or a private channel (ID) that the user is a member of
 SOURCE_CHANNEL = -1001879580266  
 DESTINATION_CHANNEL = '@testinggggg6666'
 HEALTH_CHECK_PORT = 8000
@@ -54,35 +54,34 @@ class MessageForwarder:
             self.source_entity = await self.client.get_entity(self.source_channel)
             self.destination_entity = await self.client.get_entity(self.destination_channel)
             
-            # Get last message ID from source channel
+            # Initialize last_message_id to the most recent message id in the source channel
             messages = await self.client.get_messages(self.source_entity, limit=1)
             if messages:
                 self.last_message_id = messages[0].id
 
-            print(f"Starting forwarding from {self.source_channel} to {self.destination_channel}")
-            print(f"Last message ID: {self.last_message_id}")
+            logger.info(f"Starting forwarding from {self.source_channel} to {self.destination_channel}")
+            logger.info(f"Last message ID: {self.last_message_id}")
 
             while self.is_running:
+                # Set min_id to last_message_id + 1 to avoid re-fetching the last message
+                min_id = (self.last_message_id or 0) + 1
                 try:
-                    # Get new messages since last checked message
-                    messages = await self.client.get_messages(
-                        self.source_entity, 
-                        min_id=self.last_message_id
-                    )
+                    # Get all new messages with id greater than self.last_message_id
+                    messages = await self.client.get_messages(self.source_entity, min_id=min_id)
+                    # Reverse so that messages are processed in chronological order
                     for message in reversed(messages):
                         try:
-                            # Forward the message
                             await self.client.send_message(self.destination_entity, message)
-                            print(f"Forwarded message ID: {message.id}")
+                            logger.info(f"Forwarded message ID: {message.id}")
                             self.last_message_id = max(self.last_message_id or 0, message.id)
                         except Exception as e:
-                            print(f"Error forwarding message {message.id}: {str(e)}")
+                            logger.error(f"Error forwarding message {message.id}: {str(e)}")
                 except Exception as e:
-                    print(f"Error getting messages: {str(e)}")
+                    logger.error(f"Error getting messages: {str(e)}")
                 await asyncio.sleep(5)  # Check every 5 seconds
 
         except Exception as e:
-            print(f"Forwarding error: {str(e)}")
+            logger.error(f"Forwarding error: {str(e)}")
 
     def stop_forwarding(self):
         self.is_running = False
@@ -97,7 +96,7 @@ def register_handlers():
     @bot.on(events.NewMessage(pattern='/start'))
     async def start_handler(event):
         await event.respond('Welcome! Click the button below to start authentication.',
-                          buttons=Button.inline('Begin Authentication', b'auth'))
+                              buttons=Button.inline('Begin Authentication', b'auth'))
 
     @bot.on(events.CallbackQuery(data=b'auth'))
     async def auth_handler(event):
@@ -121,7 +120,6 @@ def register_handlers():
                     if not client.is_connected():
                         await client.connect()
                     
-                    # Send code request for user authentication
                     result = await client(functions.auth.SendCodeRequest(
                         phone_number=phone,
                         api_id=int(API_ID),
@@ -144,7 +142,7 @@ def register_handlers():
                         "Enter /cancel to cancel the process"
                     )
                 except Exception as e:
-                    print(f"Debug - Error details: {str(e)}")
+                    logger.error(f"Debug - Error details: {str(e)}")
                     await event.respond(f'Error sending code: {str(e)}. Please try again.')
                     del auth_users[user_id]
 
@@ -204,19 +202,15 @@ def register_handlers():
 async def start_forwarding():
     global forwarder
     try:
-        # Create new forwarder instance; this works for both public and private source channels
         forwarder = MessageForwarder(client, SOURCE_CHANNEL, DESTINATION_CHANNEL)
-        
-        # Start forwarding in background
         asyncio.create_task(forwarder.start_forwarding())
-        
-        print("Bot is running!")
-        print(f"Monitoring {SOURCE_CHANNEL}")
-        print(f"Forwarding to {DESTINATION_CHANNEL}")
+        logger.info("Bot is running!")
+        logger.info(f"Monitoring {SOURCE_CHANNEL}")
+        logger.info(f"Forwarding to {DESTINATION_CHANNEL}")
     except Exception as e:
-        print(f"Error starting forwarder: {str(e)}")
+        logger.error(f"Error starting forwarder: {str(e)}")
 
-# Health check server using simple HTTP server
+# Health check server using standard HTTP server
 class HealthCheckHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -224,32 +218,25 @@ class HealthCheckHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b'OK')
     
-    # Silence the log messages
     def log_message(self, format, *args):
         pass
 
 def start_health_server():
     handler = HealthCheckHandler
     server = socketserver.TCPServer(("0.0.0.0", HEALTH_CHECK_PORT), handler)
-    
-    # Run server in a separate thread
     thread = threading.Thread(target=server.serve_forever)
-    thread.daemon = True  # So the thread will exit when the main thread exits
+    thread.daemon = True
     thread.start()
-    
     logger.info(f"Health check server started on port {HEALTH_CHECK_PORT}")
     return server
 
 async def main():
     try:
-        # Start health check server first
         health_server = start_health_server()
         logger.info("Health check server started successfully")
         
         await bot.start(bot_token=BOT_TOKEN)
         await client.connect()
-        
-        # Register handlers
         register_handlers()
         
         if await client.is_user_authorized():
@@ -260,7 +247,6 @@ async def main():
             print("Waiting for authentication through bot...")
             print("Please start the bot and complete authentication.")
         
-        # Run bot until disconnected
         await bot.run_until_disconnected()
     except Exception as e:
         logger.error(f"Main loop error: {str(e)}")
