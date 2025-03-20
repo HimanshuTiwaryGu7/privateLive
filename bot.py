@@ -8,8 +8,10 @@ from telethon.errors import (
 import asyncio
 import nest_asyncio
 from telethon.sync import TelegramClient as SyncTelegramClient
-# Add imports for web server
-from aiohttp import web
+# Replace aiohttp with standard library modules
+import http.server
+import socketserver
+import threading
 import logging
 
 # Setup logging
@@ -214,27 +216,34 @@ async def start_forwarding():
     except Exception as e:
         print(f"Error starting forwarder: {str(e)}")
 
-# Health check server setup
-async def health_check(request):
-    return web.Response(text="OK", status=200)
+# Health check server using simple HTTP server
+class HealthCheckHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b'OK')
+    
+    # Silence the log messages
+    def log_message(self, format, *args):
+        pass
 
-async def start_health_server():
-    app = web.Application()
-    app.router.add_get('/', health_check)
-    app.router.add_get('/health', health_check)
+def start_health_server():
+    handler = HealthCheckHandler
+    server = socketserver.TCPServer(("0.0.0.0", HEALTH_CHECK_PORT), handler)
     
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', HEALTH_CHECK_PORT)
+    # Run server in a separate thread
+    thread = threading.Thread(target=server.serve_forever)
+    thread.daemon = True  # So the thread will exit when the main thread exits
+    thread.start()
     
-    logger.info(f"Starting health check server on port {HEALTH_CHECK_PORT}")
-    await site.start()
-    return runner
+    logger.info(f"Health check server started on port {HEALTH_CHECK_PORT}")
+    return server
 
 async def main():
     try:
         # Start health check server first
-        health_server = await start_health_server()
+        health_server = start_health_server()
         logger.info("Health check server started successfully")
         
         await bot.start(bot_token=BOT_TOKEN)
@@ -262,7 +271,7 @@ async def main():
         await client.disconnect()
         await bot.disconnect()
         if 'health_server' in locals():
-            await health_server.cleanup()
+            health_server.shutdown()
             logger.info("Health server shut down")
 
 if __name__ == '__main__':
