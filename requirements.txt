@@ -1,2 +1,4 @@
 telethon==1.28.0
 nest_asyncio==1.5.6
+pillow==9.5.0
+imghdr-pure==0.1.0
