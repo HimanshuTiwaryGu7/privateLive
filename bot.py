@@ -8,6 +8,13 @@ from telethon.errors import (
 import asyncio
 import nest_asyncio
 from telethon.sync import TelegramClient as SyncTelegramClient
+# Add imports for web server
+from aiohttp import web
+import logging
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Apply nest_asyncio
 nest_asyncio.apply()
@@ -19,6 +26,7 @@ BOT_TOKEN = '8159885107:AAGHJyvF6NT8o5WXojiDlK_pxmmoeoY6drU'
 # SOURCE_CHANNEL can be a public username (e.g., '@Dhol_Ullu_Originals') or private channel (invite or ID) that the user is a member of
 SOURCE_CHANNEL = -1001879580266  
 DESTINATION_CHANNEL = '@testinggggg6666'
+HEALTH_CHECK_PORT = 8000
 
 class UserSession:
     def __init__(self):
@@ -206,8 +214,29 @@ async def start_forwarding():
     except Exception as e:
         print(f"Error starting forwarder: {str(e)}")
 
+# Health check server setup
+async def health_check(request):
+    return web.Response(text="OK", status=200)
+
+async def start_health_server():
+    app = web.Application()
+    app.router.add_get('/', health_check)
+    app.router.add_get('/health', health_check)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', HEALTH_CHECK_PORT)
+    
+    logger.info(f"Starting health check server on port {HEALTH_CHECK_PORT}")
+    await site.start()
+    return runner
+
 async def main():
     try:
+        # Start health check server first
+        health_server = await start_health_server()
+        logger.info("Health check server started successfully")
+        
         await bot.start(bot_token=BOT_TOKEN)
         await client.connect()
         
@@ -216,19 +245,25 @@ async def main():
         
         if await client.is_user_authorized():
             await start_forwarding()
+            logger.info("User is authorized, forwarding started")
         else:
+            logger.info("Waiting for authentication through bot...")
             print("Waiting for authentication through bot...")
             print("Please start the bot and complete authentication.")
         
         # Run bot until disconnected
         await bot.run_until_disconnected()
     except Exception as e:
+        logger.error(f"Main loop error: {str(e)}")
         print(f"Main loop error: {str(e)}")
     finally:
         if forwarder:
             forwarder.stop_forwarding()
         await client.disconnect()
         await bot.disconnect()
+        if 'health_server' in locals():
+            await health_server.cleanup()
+            logger.info("Health server shut down")
 
 if __name__ == '__main__':
     try:
